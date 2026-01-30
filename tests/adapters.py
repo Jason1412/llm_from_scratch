@@ -9,6 +9,8 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
+from collections import Counter
+
 
 def run_linear(
     d_in: int,
@@ -589,4 +591,54 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    # Initialize the vocabulary with base bytes (0-255)
+    vocab = {i: bytes(i) for i in range(256)}
+
+    # Add special tokens to vocab
+    for special_token in special_tokens:
+        if special_token not in vocab:
+            vocab[len(vocab)] = special_token.encode("utf-8")
+
+    num_merges = vocab_size - len(vocab)
+
+    if num_merges < 0:
+        raise ValueError("Vocab size must be greater than the sum of 256 and the count of special tokens.")
+    
+    # Load data and process
+    with open(input_path, "rb") as f:
+        text_bytes = f.read()
+
+    ids = list(text_bytes) # A list of int
+
+    merges = []
+
+    for i in range(num_merges):
+        counts = Counter()
+
+        for pair in zip(ids, ids[1:]):
+            counts[pair] += 1
+
+        best_pair = max(counts, key=counts.get)
+
+        # Given the best_pair, create the new vocab
+        new_id = len(vocab)
+        vocab[new_id] = bytes(best_pair[0]) + bytes(best_pair[1])
+        merges.append((bytes(best_pair[0]), bytes(best_pair[1])))
+
+        new_ids = []
+        skip = False
+        for j in range(len(ids)):
+
+            if skip is True:
+                skip = False
+                continue
+
+            if j < len(ids) - 1 and (ids[j], ids[j + 1]) == best_pair:
+                new_ids.append(new_id)
+                skip = True
+            else:
+                new_ids.append(ids[j])
+
+        ids = new_ids # Modify the original text, which will be used in the next round of merge
+
+    return vocab, merges
