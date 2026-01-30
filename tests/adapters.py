@@ -592,7 +592,7 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
     # Initialize the vocabulary with base bytes (0-255)
-    vocab = {i: bytes(i) for i in range(256)}
+    vocab = {i: bytes([i]) for i in range(256)}
 
     # Add special tokens to vocab
     for special_token in special_tokens:
@@ -618,12 +618,12 @@ def run_train_bpe(
         for pair in zip(ids, ids[1:]):
             counts[pair] += 1
 
-        best_pair = max(counts, key=counts.get)
+        best_pair = max(counts, key=counts.get) # The pair of index in the dict
 
         # Given the best_pair, create the new vocab
         new_id = len(vocab)
-        vocab[new_id] = bytes(best_pair[0]) + bytes(best_pair[1])
-        merges.append((bytes(best_pair[0]), bytes(best_pair[1])))
+        vocab[new_id] = vocab[best_pair[0]] + vocab[best_pair[1]]
+        merges.append((vocab[best_pair[0]], vocab[best_pair[1]]))
 
         new_ids = []
         skip = False
