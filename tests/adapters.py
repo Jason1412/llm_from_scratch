@@ -564,6 +564,10 @@ def get_tokenizer(
     raise NotImplementedError
 
 
+import regex as re
+from typing import Iterator
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
 def run_train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
@@ -594,51 +598,63 @@ def run_train_bpe(
     # Initialize the vocabulary with base bytes (0-255)
     vocab = {i: bytes([i]) for i in range(256)}
 
-    # Add special tokens to vocab
     for special_token in special_tokens:
-        if special_token not in vocab:
-            vocab[len(vocab)] = special_token.encode("utf-8")
+        special_token_bytes = special_token.encode("utf-8")
+        if special_token_bytes not in vocab.values():
+            new_id = len(vocab)
+            vocab[new_id] = special_token_bytes
 
     num_merges = vocab_size - len(vocab)
 
+
     if num_merges < 0:
         raise ValueError("Vocab size must be greater than the sum of 256 and the count of special tokens.")
-    
-    # Load data and process
-    with open(input_path, "rb") as f:
-        text_bytes = f.read()
 
-    ids = list(text_bytes) # A list of int
+    # Pre-tokenization, compute the count of each extracted chunk, easy to update the chunks
+    with open(input_path, "r", encoding="utf-8", errors="replace") as f: 
+        text = f.read() # text --- string, will encode and decode the file by utf-8, then output the content as text
+
+    special_pat = "|".join(re.escape(st) for st in special_tokens)
+    parts = re.split(special_pat, text)
+
+    counts = Counter()
+    for part in parts:
+        chunks = re.finditer(PAT, part)
+        for chunk in chunks:
+            chunk_bytes = tuple(chunk.group().encode("utf-8"))
+            counts[chunk_bytes] += 1
 
     merges = []
 
-    for i in range(num_merges):
-        counts = Counter()
+    for _ in range(num_merges):
+        pair_counts = Counter()
+        for sequence, freq in counts.items():
+            for pair in zip(sequence, sequence[1:]):
+                pair_counts[pair] += freq
 
-        for pair in zip(ids, ids[1:]):
-            counts[pair] += 1
+        if not pair_counts:
+            break   
 
-        best_pair = max(counts, key=counts.get) # The pair of index in the dict
-
-        # Given the best_pair, create the new vocab
+        best_pair = max(pair_counts, key=lambda p: (pair_counts[p], vocab[p[0]], vocab[p[1]]))
         new_id = len(vocab)
+
         vocab[new_id] = vocab[best_pair[0]] + vocab[best_pair[1]]
         merges.append((vocab[best_pair[0]], vocab[best_pair[1]]))
 
-        new_ids = []
-        skip = False
-        for j in range(len(ids)):
+        new_counts = Counter()
+        for sequence, freq in counts.items():
+            new_sequence = []
+            i = 0
+            while i < len(sequence):
+                if i < len(sequence) - 1 and (sequence[i], sequence[i+1]) == best_pair:
+                    new_sequence.append(new_id)
+                    i += 2
+                else:
+                    new_sequence.append(sequence[i])
+                    i += 1
 
-            if skip is True:
-                skip = False
-                continue
+            new_counts[tuple(new_sequence)] += freq
 
-            if j < len(ids) - 1 and (ids[j], ids[j + 1]) == best_pair:
-                new_ids.append(new_id)
-                skip = True
-            else:
-                new_ids.append(ids[j])
-
-        ids = new_ids # Modify the original text, which will be used in the next round of merge
+        counts = new_counts
 
     return vocab, merges
