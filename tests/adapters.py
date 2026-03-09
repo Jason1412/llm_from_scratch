@@ -12,6 +12,13 @@ from torch import Tensor
 from collections import Counter
 
 from cs336_basics.bpe.tokenizer_orig import Tokenizer
+from cs336_basics.transformer.linear import Linear
+from cs336_basics.transformer.embedding import Embedding
+from cs336_basics.transformer.rmsnorm import RMSNorm
+from cs336_basics.transformer.positionwise_feedfoward import SwiGLUFFW
+
+
+
 
 
 def run_linear(
@@ -32,8 +39,13 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    linear = Linear(d_in, d_out, device=in_features.device, dtype=in_features.dtype)
+    with torch.no_grad():
+        linear.weight.copy_(
+            weights.to(device=in_features.device, dtype=in_features.dtype)
+        )
 
-    raise NotImplementedError
+    return linear(in_features)
 
 
 def run_embedding(
@@ -54,8 +66,13 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
+    embedding = Embedding(vocab_size, d_model, device=token_ids.device)
+    with torch.no_grad():
+        embedding.embedding_mat.copy_(
+            weights.to(device=token_ids.device)
+        )
 
-    raise NotImplementedError
+    return embedding(token_ids)
 
 
 def run_swiglu(
@@ -87,8 +104,14 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    
+    swiglu = SwiGLUFFW(d_model, d_ff)
+    with torch.no_grad():
+        swiglu.w1.weight.copy_(w1_weight)
+        swiglu.w2.weight.copy_(w2_weight)
+        swiglu.w3.weight.copy_(w3_weight)
 
+    return swiglu(in_features)
 
 def run_scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
@@ -382,7 +405,13 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    rmsnorm = RMSNorm(d_model, eps, device=in_features.device, dtype=in_features.dtype)
+    with torch.no_grad():
+        rmsnorm.g.copy_(weights.to(device=in_features.device))
+
+    return rmsnorm(in_features)
+
+
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
