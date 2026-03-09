@@ -20,6 +20,12 @@ class Tokenizer:
                 if bytes_val == token_bytes:
                     self.special_to_id[token] = id_val
                     break
+        
+        self.pat_compiled = regex.compile(PAT)
+        self.special_pat_compiled = None
+        if self.special_tokens:
+            sorted_special_tokens = sorted(self.special_tokens, key=len, reverse=True)
+            self.special_pat_compiled = regex.compile('|'.join(map(regex.escape, sorted_special_tokens)))
 
         
     def _get_bpe_merges(self, piece: bytes) -> List[bytes]:
@@ -57,58 +63,59 @@ class Tokenizer:
 
         return parts
     
-
-    def encode(self, text: str) -> List[int]:
-        if not text:
-            return []
-        
-        sorted_special_tokens = sorted(self.special_tokens, key=len, reverse=True)
-        special_token_pattern = '|'.join(map(regex.escape, sorted_special_tokens))
-
-        if self.special_tokens:
-            chunks = regex.split(f'({special_token_pattern})', text)
-        else:
-            chunks = [text]
-
-        final_ids = []
-        for chunk in chunks:
-            if not chunk:
+    def _process_chunk(self, chunk: str) -> Iterator[int]:
+        for match in self.pat_compiled.finditer(chunk):
+            word = match.group()
+            if not word:
                 continue
 
-            if chunk in self.special_tokens:
+            merged_pieces = self._get_bpe_merges(word.encode('utf-8'))
+            
+            for piece in merged_pieces:
+                if piece in self.bytes_to_id:
+                    yield self.bytes_to_id[piece]
+                else:
+                    if '<unk>' in self.special_to_id:
+                        yield self.special_to_id['<unk>']
+                    else:
+                        yield self.special_to_id.get(self.special_tokens[0], 0)
+
+    def _encode_generator(self, text: str) -> Iterator[int]:
+        if not text:
+            return
+
+        if self.special_pat_compiled:
+            last_end = 0
+            for match in self.special_pat_compiled.finditer(text):
+                start, end = match.span()
+                if start > last_end:
+                    yield from self._process_chunk(text[last_end:start])
+                
+                chunk = match.group()
                 if chunk in self.special_to_id:
-                    final_ids.append(self.special_to_id[chunk])
+                    yield self.special_to_id[chunk]
                 else:
                     chunk_bytes = chunk.encode('utf-8')
                     if chunk_bytes in self.bytes_to_id:
-                        final_ids.append(self.bytes_to_id[chunk_bytes])
+                        yield self.bytes_to_id[chunk_bytes]
                     else:
                         if '<unk>' in self.special_to_id:
-                            final_ids.append(self.bytes_to_id['<unk>'])
+                            yield self.special_to_id['<unk>']
                         else:
-                            final_ids.append(self.special_to_id.get(self.special_tokens[0], 0))   
-                
-            else:
-                for word in regex.findall(PAT, chunk):
-                    if not word:
-                        continue
+                            yield self.special_to_id.get(self.special_tokens[0], 0)
+                last_end = end
+            
+            if last_end < len(text):
+                yield from self._process_chunk(text[last_end:])
+        else:
+            yield from self._process_chunk(text)
 
-                    merged_pieces = self._get_bpe_merges(word.encode('utf-8'))
-                    
-                    for piece in merged_pieces:
-                        if piece in self.bytes_to_id:
-                            final_ids.append(self.bytes_to_id[piece])
-                        else:
-                            if '<unk>' in self.special_to_id:
-                                final_ids.append(self.special_to_id['<unk>'])
-                            else:
-                                final_ids.append(self.special_to_id.get(self.special_tokens[0], 0))
-
-        return final_ids
+    def encode(self, text: str) -> List[int]:
+        return list(self._encode_generator(text))
     
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for s in iterable:
-            yield from self.encode(s)
+            yield from self._encode_generator(s)
 
     def decode(self, ids: List[int]):
         
