@@ -16,8 +16,11 @@ from cs336_basics.transformer.linear import Linear
 from cs336_basics.transformer.embedding import Embedding
 from cs336_basics.transformer.rmsnorm import RMSNorm
 from cs336_basics.transformer.positionwise_feedfoward import SwiGLUFFW
-
-
+from cs336_basics.transformer.rotary_positional_embedding import RotaryPositionalEmbedding
+from cs336_basics.transformer.softmax import softmax
+from cs336_basics.transformer.scaled_dot_product_attention import scaled_dot_product_attention
+from cs336_basics.transformer.multihead_self_attention import MultiHeadAttn
+from cs336_basics.transformer.cross_entropy import cross_entropy
 
 
 
@@ -131,7 +134,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -165,7 +168,16 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+
+    mha = MultiHeadAttn(d_model=d_model,
+                        num_heads=num_heads)
+
+    mha.W_q.weight.data = q_proj_weight
+    mha.W_k.weight.data = k_proj_weight
+    mha.W_v.weight.data = v_proj_weight
+    mha.W_o.weight.data = o_proj_weight
+
+    return mha(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -205,7 +217,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    
+    mha = MultiHeadAttn(d_model=d_model,
+                        num_heads=num_heads,
+                        use_rope=True,
+                        theta=theta,
+                        max_seq_len=max_seq_len)
+    mha.W_q.weight.data = q_proj_weight
+    mha.W_k.weight.data = k_proj_weight
+    mha.W_v.weight.data = v_proj_weight
+    mha.W_o.weight.data = o_proj_weight
+
+    return mha(in_features, token_positions)
 
 
 def run_rope(
@@ -227,7 +250,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device=in_query_or_key.device)
+
+    return rope(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
@@ -300,8 +325,29 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    
+    from cs336_basics.transformer.transformer_block import TransformerBlock
 
+    block = TransformerBlock(
+        d_model=d_model, 
+        num_heads=num_heads, 
+        d_ff=d_ff, 
+        use_rope=True,
+        theta=theta,
+        max_seq_len=max_seq_len)
+    
+    block.attn.W_q.weight.data = weights["attn.q_proj.weight"]
+    block.attn.W_k.weight.data = weights["attn.k_proj.weight"]
+    block.attn.W_v.weight.data = weights["attn.v_proj.weight"]
+    block.attn.W_o.weight.data = weights["attn.output_proj.weight"]
+
+    block.rms_norm1.weight.data = weights["ln1.weight"]
+    block.ffn.w1.weight.data = weights["ffn.w1.weight"]
+    block.ffn.w2.weight.data = weights["ffn.w2.weight"]
+    block.ffn.w3.weight.data = weights["ffn.w3.weight"]
+    block.rms_norm2.weight.data = weights["ln2.weight"]
+
+    return block(in_features, token_positions=None)
 
 def run_transformer_lm(
     vocab_size: int,
@@ -382,8 +428,37 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.transformer_lm import TransformerLM
 
+    model = TransformerLM(
+        vocab_size=vocab_size,
+        num_layers=num_layers,
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        use_rope=True,
+        rope_theta=rope_theta,
+        max_seq_len=context_length,
+    )
+
+    model.token_embeddings.weight.data = weights["token_embeddings.weight"]
+    for layer_idx in range(num_layers):
+        layer_prefix = f"layers.{layer_idx}"
+        layer = model.layers[layer_idx]
+        layer.attn.W_q.weight.data = weights[f"{layer_prefix}.attn.q_proj.weight"]
+        layer.attn.W_k.weight.data = weights[f"{layer_prefix}.attn.k_proj.weight"]
+        layer.attn.W_v.weight.data = weights[f"{layer_prefix}.attn.v_proj.weight"]
+        layer.attn.W_o.weight.data = weights[f"{layer_prefix}.attn.output_proj.weight"]
+        layer.rms_norm1.weight.data = weights[f"{layer_prefix}.ln1.weight"]
+        layer.ffn.w1.weight.data = weights[f"{layer_prefix}.ffn.w1.weight"]
+        layer.ffn.w2.weight.data = weights[f"{layer_prefix}.ffn.w2.weight"]
+        layer.ffn.w3.weight.data = weights[f"{layer_prefix}.ffn.w3.weight"]
+        layer.rms_norm2.weight.data = weights[f"{layer_prefix}.ln2.weight"]
+
+    model.final_norm.weight.data = weights["ln_final.weight"]
+    model.final_linear.weight.data = weights['lm_head.weight']
+
+    return model(in_indices)
 
 def run_rmsnorm(
     d_model: int,
@@ -464,7 +539,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    return softmax(in_features, dim)
 
 
 def run_cross_entropy(
@@ -482,7 +557,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
