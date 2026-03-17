@@ -47,6 +47,12 @@ class TransformerLM(nn.Module):
         self.final_linear = Linear(d_model, vocab_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        '''
+        Input:
+            x: (batch_size, seq_len), a matrix of indices in the vocab_size
+        Output:
+            logits: (batch_size, seq_len, vocab_size)
+        '''
         x = self.token_embeddings(x)
         for layer in self.layers:
             x = layer(x)

@@ -10,9 +10,11 @@ def cross_entropy(
     '''
     Description:
         - This function computes the loss of a single predicted target.
-    Args:
-        - inputs: Shape[batch_size, vocab_size]
-        - targets: Shape[batch_size], 
+    Input:
+        - input_logits: Shape[batch_size, vocab_size]
+        - targets: Shape[batch_size], indices in the vocab_size
+    Output:
+        - loss.mean(): Shape[1]
     '''
     max_logits, _ = torch.max(input_logits, dim=-1, keepdim=True)  # Find the max along vocab_size dimension
     shifted_logits = input_logits - max_logits
@@ -27,5 +29,3 @@ def cross_entropy(
     loss = log_exp_sum - target_logits
 
     return loss.mean()
-
-

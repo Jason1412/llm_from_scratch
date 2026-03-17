@@ -10,6 +10,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from collections import Counter
+import multiprocessing as mp
 
 from cs336_basics.bpe.tokenizer_orig import Tokenizer
 from cs336_basics.transformer.linear import Linear
@@ -21,6 +22,11 @@ from cs336_basics.transformer.softmax import softmax
 from cs336_basics.transformer.scaled_dot_product_attention import scaled_dot_product_attention
 from cs336_basics.transformer.multihead_self_attention import MultiHeadAttn
 from cs336_basics.transformer.cross_entropy import cross_entropy
+from cs336_basics.transformer.adamw import AdamW
+from cs336_basics.transformer.learning_rate_schedule import learning_rate_schedule
+from cs336_basics.transformer.gradient_clipping import gradient_clipping
+from cs336_basics.transformer.data_loading import data_loading
+from cs336_basics.transformer.checkpointing import save_checkpoint, load_checkpoint
 
 
 
@@ -523,7 +529,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return data_loading(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -569,14 +575,14 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -604,7 +610,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return learning_rate_schedule(it, min_learning_rate, max_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(
@@ -623,7 +629,9 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    return save_checkpoint(model, optimizer, iteration, out)
+
+
 
 
 def run_load_checkpoint(
@@ -644,7 +652,9 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    return load_checkpoint(src, model, optimizer)
+
+
 
 
 def get_tokenizer(
@@ -673,6 +683,14 @@ def get_tokenizer(
 import regex as re
 from typing import Iterator
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+def _tokenize_parts(parts: list[str]) -> Counter:
+    counts = Counter()
+    for part in parts:
+        for chunk in re.finditer(PAT, part):
+            chunk_bytes = tuple(chunk.group().encode("utf-8"))
+            counts[chunk_bytes] += 1
+    return counts
 
 def run_train_bpe(
     input_path: str | os.PathLike,
@@ -720,24 +738,55 @@ def run_train_bpe(
     with open(input_path, "r", encoding="utf-8", errors="replace") as f: 
         text = f.read() # text --- string, will encode and decode the file by utf-8, then output the content as text
 
-    special_pat = "|".join(re.escape(st) for st in special_tokens)
-    parts = re.split(special_pat, text)
+    if special_tokens:
+        sorted_special_tokens = sorted(special_tokens, key=len, reverse=True)
+        special_pat = "|".join(re.escape(st) for st in sorted_special_tokens)
+        parts = re.split(special_pat, text)
+    else:
+        parts = [text]
 
-    counts = Counter()
+    try:
+        num_cores = max(1, mp.cpu_count() - 1)
+    except NotImplementedError:
+        num_cores = 1
+
+    # Safely chunk parts that are too large to ensure even distribution across processes
+    safe_parts = []
     for part in parts:
-        chunks = re.finditer(PAT, part)
-        for chunk in chunks:
-            chunk_bytes = tuple(chunk.group().encode("utf-8"))
-            counts[chunk_bytes] += 1
+        if len(part) > 1000000:  # Roughly 1MB threshold
+            chunk_size = len(part) // num_cores
+            idx = 0
+            while idx < len(part):
+                next_idx = idx + chunk_size
+                if next_idx < len(part):
+                    # Find a safe split point (newline followed by non-whitespace)
+                    while next_idx < len(part) - 1 and not (part[next_idx] == '\n' and not part[next_idx + 1].isspace()):
+                        next_idx += 1
+                    next_idx += 1
+                safe_parts.append(part[idx:next_idx])
+                idx = next_idx
+        else:
+            safe_parts.append(part)
+
+    batches = [safe_parts[i::num_cores] for i in range(num_cores)]
+    counts = Counter()
+    if num_cores > 1:
+        with mp.Pool(num_cores) as pool:
+            results = pool.map(_tokenize_parts, batches)
+        for res in results:
+            counts.update(res)
+    else:
+        counts = _tokenize_parts(safe_parts)
 
     merges = []
 
-    for _ in range(num_merges):
-        pair_counts = Counter()
-        for sequence, freq in counts.items():
-            for pair in zip(sequence, sequence[1:]):
-                pair_counts[pair] += freq
+    # Pre-calculate pair counts once
+    pair_counts = Counter()
+    for sequence, freq in counts.items():
+        for pair in zip(sequence, sequence[1:]):
+            pair_counts[pair] += freq
 
+    for _ in range(num_merges):
         if not pair_counts:
             break   
 
@@ -749,17 +798,33 @@ def run_train_bpe(
 
         new_counts = Counter()
         for sequence, freq in counts.items():
+            if best_pair[0] not in sequence:
+                new_counts[sequence] += freq
+                continue
+
             new_sequence = []
             i = 0
+            changed = False
             while i < len(sequence):
-                if i < len(sequence) - 1 and (sequence[i], sequence[i+1]) == best_pair:
+                if i < len(sequence) - 1 and sequence[i] == best_pair[0] and sequence[i+1] == best_pair[1]:
                     new_sequence.append(new_id)
                     i += 2
+                    changed = True
                 else:
                     new_sequence.append(sequence[i])
                     i += 1
 
-            new_counts[tuple(new_sequence)] += freq
+            new_seq_tuple = tuple(new_sequence)
+            new_counts[new_seq_tuple] += freq
+            
+            # Only update the counts of pairs if the sequence was actually merged
+            if changed:
+                for pair in zip(sequence, sequence[1:]):
+                    pair_counts[pair] -= freq
+                    if pair_counts[pair] <= 0:
+                        del pair_counts[pair]
+                for pair in zip(new_seq_tuple, new_seq_tuple[1:]):
+                    pair_counts[pair] += freq
 
         counts = new_counts
 
