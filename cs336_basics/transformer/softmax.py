@@ -6,6 +6,9 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     Args:
         x: Input tensor
         dim: the dimension to perform softmax
+
+    NOTE:
+        - The shape of input and output will be identical.
     '''
 
     max_val = torch.max(x, dim=dim, keepdim=True).values
