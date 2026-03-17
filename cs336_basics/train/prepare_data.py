@@ -1,7 +1,8 @@
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 import argparse
-
+from cs336_basics.bpe.tokenizer_orig import Tokenizer
 
 
 def prepare(input_path, output_path, tokenizer):
@@ -35,4 +36,17 @@ def main():
     
     args = parser.parse_args()
     
+    tokenizer = Tokenizer.from_files(args.vocab, args.merges, special_tokens=["<|endoftext|>"])
     
+    if Path(args.train_input).exists():
+        prepare(args.train_input, args.train_output, tokenizer)
+    else:
+        print(f"Warning: {args.train_input} does not exist")
+        
+    if Path(args.val_input).exists():
+        prepare(args.val_input, args.val_output, tokenizer)
+    else:
+        print(f"Warning: {args.val_input} does not exist")
+        
+if __name__ == "__main__":
+    main()
