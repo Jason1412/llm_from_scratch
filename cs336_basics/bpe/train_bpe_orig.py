@@ -3,6 +3,9 @@ import multiprocessing as mp
 
 import regex as re
 from typing import Iterator
+import logging
+from tqdm import trange
+
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 def _tokenize_parts(parts: list[str]) -> Counter:
@@ -34,6 +37,7 @@ def train_bpe(
     if num_merges < 0:
         raise ValueError("Vocab size must be greater than the sum of 256 and the count of special tokens.")
 
+    logging.info("Training BPE tokenizer...")
     # Pre-tokenization, compute the count of each extracted chunk, easy to update the chunks
     with open(input_path, "r", encoding="utf-8", errors="replace") as f: 
         text = f.read() # text --- string, will encode and decode the file by utf-8, then output the content as text
@@ -50,6 +54,8 @@ def train_bpe(
     except NotImplementedError:
         num_cores = 1
 
+
+    logging.info("Preparing chunks...")
     # Safely chunk parts that are too large to ensure even distribution across processes
     safe_parts = []
     for part in parts:
@@ -80,13 +86,14 @@ def train_bpe(
 
     merges = []
 
+    logging.info("Start merging process...")
     # Pre-calculate pair counts once
     pair_counts = Counter()
     for sequence, freq in counts.items():
         for pair in zip(sequence, sequence[1:]):
             pair_counts[pair] += freq
 
-    for _ in range(num_merges):
+    for _ in trange(num_merges):
         if not pair_counts:
             break   
 
@@ -127,5 +134,7 @@ def train_bpe(
                     pair_counts[pair] += freq
 
         counts = new_counts
-
+        
+    
+    logging.info("Finished training BPE tokenizer.")
     return vocab, merges
