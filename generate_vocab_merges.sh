@@ -1,0 +1,1 @@
+uv run python -m cs336_basics.train.prepare_vocab_merges --input_corpus data/TinyStoriesV2-GPT4-train.txt --save_dir bpe
