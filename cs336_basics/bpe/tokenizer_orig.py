@@ -2,7 +2,12 @@ import regex
 from collections import defaultdict
 from typing import Iterable, Iterator, List, Set, Tuple
 import torch
+import json
+from tests.common import gpt2_bytes_to_unicode
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+TokenPair = tuple[bytes, bytes]
+
 
 class Tokenizer:
     def __init__(self, vocab, merges, special_tokens=None):
@@ -109,6 +114,42 @@ class Tokenizer:
                 yield from self._process_chunk(text[last_end:])
         else:
             yield from self._process_chunk(text)
+    
+    @classmethod
+    def from_files(
+        cls,
+        vocab_filepath: str,
+        merges_filepath: str,
+        special_tokens: List[str] | None = None,
+    ):
+        '''
+        - In the file of merges, each line is a pair of token separated by space.
+        - In the file of vocab, it is a dict with the key is the token, value is the int index. 
+        '''
+        
+        with open(merges_filepath, "r") as merges_file:
+            merges: list[TokenPair]
+            gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+            merges_raw = [tuple(line.rstrip().split(" ")) for line in merges_file]
+            merges = [
+                (
+                    bytes([gpt2_byte_decoder[token] for token in merge_token_1]),
+                    bytes([gpt2_byte_decoder[token] for token in merge_token_2]),
+                )
+                for merge_token_1, merge_token_2 in merges_raw]
+
+        with open(vocab_filepath, encoding="utf-8") as f:
+            vocab_reversed = json.load(f)
+            vocab = {
+                gpt2_vocab_index: bytes(
+                    [gpt2_byte_decoder[token] for token in gpt2_vocab_item]
+                )
+                for gpt2_vocab_item, gpt2_vocab_index in vocab_reversed.items()
+            }
+
+        return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    
+
 
     def encode(self, text: str) -> List[int]:
         return list(self._encode_generator(text))
