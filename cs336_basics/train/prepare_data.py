@@ -2,27 +2,39 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import argparse
+import multiprocessing as mp
 from cs336_basics.bpe.tokenizer_orig import Tokenizer
 
+_tokenizer = None
 
-def prepare(input_path, output_path, tokenizer):
+def _init_worker(tokenizer):
+    global _tokenizer
+    _tokenizer = tokenizer
+
+def _process_chunk(lines):
+    return np.array(list(_tokenizer.encode_iterable(lines)), dtype=np.uint16)
+
+def _chunk_reader(input_path, chunk_size=10000):
+    with open(input_path, "r", encoding="utf-8") as f:
+        chunk = []
+        for line in f:
+            chunk.append(line)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+
+def prepare(input_path, output_path, tokenizer, num_processes=None):
     print(f"Processing {input_path} -> {output_path}")
     
-    buffer = []
-    buffer_size = 1024 * 1024
-    
+    if num_processes is None:
+        num_processes = max(1, mp.cpu_count() - 1)
+        
     with open(output_path, "wb") as f_out:
-        with open(input_path, "r", encoding="utf-8") as f_in:
-            for token_id in tqdm(tokenizer.encode_iterable(f_in)):
-                buffer.append(token_id)
-                
-                if len(buffer) >= buffer_size:
-                    np.array(buffer, dtype=np.uint16).tofile(f_out)
-                    buffer = []
-                    
-                    
-        if buffer:
-            np.array(buffer, dtype=np.uint16).tofile(f_out)
+        with mp.Pool(processes=num_processes, initializer=_init_worker, initargs=(tokenizer,)) as pool:
+            for tokens in tqdm(pool.imap(_process_chunk, _chunk_reader(input_path))):
+                tokens.tofile(f_out)
             
         
 def main():
