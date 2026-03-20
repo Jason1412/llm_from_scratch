@@ -12,7 +12,7 @@ from cs336_basics.transformer.learning_rate_schedule import learning_rate_schedu
 from cs336_basics.transformer.gradient_clipping import gradient_clipping
 import wandb
 import math
-from time import time
+import time
 import matplotlib.pyplot as plt
 
 
@@ -180,7 +180,7 @@ def main():
         )
     
     train_data = load_memmap(args.train_bin, args.dtype)
-    val_data = load_memap(args.val_bin, args.dtype)
+    val_data = load_memmap(args.val_bin, args.dtype)
     min_required = args.context_length + 1
     if train_data.shape[0] <= min_required or val_data.shape[0] <= min_required:
         raise ValueError("Datasets must by longer than context_length+1")
@@ -238,7 +238,7 @@ def main():
             elapsed = time.time() - log_window_start
             token_per_sec = tokens_per_batch * args.log_interval / max(elapsed, 1e-9)
             print(
-                f"step {step+1:07d} | loss {loss.item():.4f} | lr {lr:.2e} | tok/s {tok_per_sec:,.0f}"
+                f"step {step+1:07d} | loss {loss.item():.4f} | lr {lr:.2e} | tok/s {token_per_sec:,.0f}"
             )
             log_window_start = time.time()
 
