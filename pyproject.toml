@@ -21,6 +21,7 @@ dependencies = [
     "ty>=0.0.1a16",
     "line-profiler>=5.0.0",
     "snakeviz>=2.2.2",
+    "matplotlib>=3.10.8",
 ]
 
 [build-system]
