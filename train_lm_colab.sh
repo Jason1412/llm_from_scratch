@@ -8,8 +8,8 @@ out_dir="checkpoints/${run_name}"
 uv run cs336_basics/train/train_llm.py \
     --lr "$lr" \
     --out_dir "$out_dir" \
-    --train_bin "/content/llm_from_scratch/data" \
-    --val_bin "/content/llm_from_scratch/data" \
+    --train_bin "/content/llm_from_scratch/data/train.bin" \
+    --val_bin "/content/llm_from_scratch/data/val.bin" \
     --max_steps 80000 \
     --eval_interval 200 \
     --warmup_steps 1000 \
